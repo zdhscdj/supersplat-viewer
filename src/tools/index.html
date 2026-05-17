@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3DGS Studio - Spark.js 2.0 Tool</title>
+    <link rel="stylesheet" href="./tool.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
+            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.0.0/spark.module.js"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="app">
+        <!-- 3D Canvas -->
+        <canvas id="viewport"></canvas>
+
+        <!-- Top Toolbar -->
+        <div id="toolbar">
+            <div class="toolbar-group">
+                <button id="btn-load" class="tool-btn" title="Load Model (.ply/.splat/.spz/.ksplat)">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                    <span>Load</span>
+                </button>
+                <input type="file" id="file-input" accept=".ply,.splat,.spz,.ksplat" hidden>
+            </div>
+            <div class="toolbar-group mode-tabs">
+                <button class="mode-btn active" data-mode="view">View</button>
+                <button class="mode-btn" data-mode="clean">Clean</button>
+                <button class="mode-btn" data-mode="path">Path</button>
+                <button class="mode-btn" data-mode="export">Export</button>
+            </div>
+            <div class="toolbar-group">
+                <button id="btn-undo" class="tool-btn" title="Undo">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/></svg>
+                </button>
+                <button id="btn-redo" class="tool-btn" title="Redo">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Left Panel: Tools -->
+        <div id="left-panel">
+            <!-- View Mode Panel -->
+            <div class="panel-section" data-panel="view">
+                <h3>Camera</h3>
+                <div class="control-row">
+                    <label>Mode</label>
+                    <select id="camera-mode">
+                        <option value="orbit">Orbit</option>
+                        <option value="fly">Fly</option>
+                    </select>
+                </div>
+                <div class="control-row">
+                    <label>FOV</label>
+                    <input type="range" id="fov-slider" min="20" max="120" value="60">
+                    <span id="fov-value">60</span>
+                </div>
+                <button id="btn-frame" class="panel-btn">Frame Scene</button>
+                <button id="btn-reset-camera" class="panel-btn">Reset Camera</button>
+            </div>
+
+            <!-- Clean Mode Panel -->
+            <div class="panel-section hidden" data-panel="clean">
+                <h3>Brush Tool</h3>
+                <div class="control-row">
+                    <label>Tool</label>
+                    <select id="clean-tool">
+                        <option value="brush">Brush Erase</option>
+                        <option value="box">Box Select</option>
+                        <option value="sphere">Sphere Select</option>
+                    </select>
+                </div>
+                <div class="control-row">
+                    <label>Radius</label>
+                    <input type="range" id="brush-radius" min="1" max="100" value="20">
+                    <span id="radius-value">20</span>
+                </div>
+                <div class="control-row">
+                    <label>Opacity</label>
+                    <input type="range" id="brush-opacity" min="0" max="100" value="0">
+                    <span id="opacity-value">0%</span>
+                </div>
+                <h3>Auto Filter</h3>
+                <div class="control-row">
+                    <label>Float Threshold</label>
+                    <input type="range" id="float-threshold" min="0" max="100" value="50">
+                    <span id="threshold-value">50</span>
+                </div>
+                <div class="control-row">
+                    <label>Min Neighbors</label>
+                    <input type="range" id="min-neighbors" min="1" max="20" value="3">
+                    <span id="neighbors-value">3</span>
+                </div>
+                <button id="btn-auto-filter" class="panel-btn accent">Auto Remove Floaters</button>
+                <button id="btn-invert-selection" class="panel-btn">Invert Selection</button>
+                <button id="btn-delete-selected" class="panel-btn danger">Delete Selected</button>
+            </div>
+
+            <!-- Path Mode Panel -->
+            <div class="panel-section hidden" data-panel="path">
+                <h3>Camera Path</h3>
+                <div class="control-row">
+                    <label>Preset</label>
+                    <select id="path-preset">
+                        <option value="orbit360">Orbit 360</option>
+                        <option value="flythrough">Fly Through</option>
+                        <option value="dolly">Dolly Zoom</option>
+                        <option value="spiral">Spiral Up</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                </div>
+                <div class="control-row">
+                    <label>Duration (s)</label>
+                    <input type="number" id="path-duration" min="1" max="120" value="10">
+                </div>
+                <div class="control-row">
+                    <label>Easing</label>
+                    <select id="path-easing">
+                        <option value="linear">Linear</option>
+                        <option value="easeInOut">Ease In-Out</option>
+                        <option value="easeIn">Ease In</option>
+                        <option value="easeOut">Ease Out</option>
+                    </select>
+                </div>
+                <button id="btn-add-keyframe" class="panel-btn accent">+ Add Keyframe</button>
+                <button id="btn-generate-path" class="panel-btn">Generate Optimal Path</button>
+                <div id="keyframe-list"></div>
+                <h3>Preview</h3>
+                <button id="btn-preview-play" class="panel-btn">Play Preview</button>
+                <button id="btn-preview-stop" class="panel-btn">Stop</button>
+                <div class="control-row">
+                    <label>Time</label>
+                    <input type="range" id="preview-time" min="0" max="100" value="0" step="0.1">
+                </div>
+            </div>
+
+            <!-- Export Mode Panel -->
+            <div class="panel-section hidden" data-panel="export">
+                <h3>Export Video</h3>
+                <div class="control-row">
+                    <label>Resolution</label>
+                    <select id="export-resolution">
+                        <option value="1920x1080">1080p (1920x1080)</option>
+                        <option value="1280x720">720p (1280x720)</option>
+                        <option value="3840x2160">4K (3840x2160)</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                </div>
+                <div class="control-row">
+                    <label>FPS</label>
+                    <select id="export-fps">
+                        <option value="24">24</option>
+                        <option value="30" selected>30</option>
+                        <option value="60">60</option>
+                    </select>
+                </div>
+                <div class="control-row">
+                    <label>Bitrate (Mbps)</label>
+                    <input type="number" id="export-bitrate" min="1" max="50" value="8">
+                </div>
+                <button id="btn-export-mp4" class="panel-btn accent">Export MP4</button>
+                <div id="export-progress" class="hidden">
+                    <div class="progress-bar"><div class="progress-fill"></div></div>
+                    <span class="progress-text">0%</span>
+                </div>
+                <h3>Export Model</h3>
+                <button id="btn-export-ply" class="panel-btn">Export Cleaned .ply</button>
+            </div>
+        </div>
+
+        <!-- Bottom Timeline -->
+        <div id="timeline" class="hidden">
+            <div class="timeline-track">
+                <div class="timeline-playhead"></div>
+                <div class="timeline-keyframes"></div>
+            </div>
+            <div class="timeline-info">
+                <span id="timeline-time">0.0s</span> / <span id="timeline-duration">10.0s</span>
+            </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div id="status-bar">
+            <span id="status-text">Ready - Drop a .ply/.splat/.spz/.ksplat file to begin</span>
+            <span id="splat-count">Splats: 0</span>
+            <span id="fps-counter">FPS: 0</span>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="hidden">
+            <div class="loading-content">
+                <div class="spinner"></div>
+                <p id="loading-text">Loading model...</p>
+                <div class="progress-bar"><div class="progress-fill" id="loading-progress"></div></div>
+            </div>
+        </div>
+
+        <!-- Brush Cursor (for clean mode) -->
+        <div id="brush-cursor" class="hidden"></div>
+    </div>
+
+    <script type="module" src="./tool.js"></script>
+</body>
+</html>
