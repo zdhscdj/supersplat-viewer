@@ -20,6 +20,18 @@ export default [{
             }, {
                 src: 'src/index.css',
                 dest: 'dist'
+            }, {
+                src: 'src/tools/index.html',
+                dest: 'dist/tools'
+            }, {
+                src: 'src/tools/tool.css',
+                dest: 'dist/tools'
+            }, {
+                src: 'src/tools/tool.js',
+                dest: 'dist/tools'
+            }, {
+                src: 'src/tools/modules',
+                dest: 'dist/tools'
             }]
         })
     ]
