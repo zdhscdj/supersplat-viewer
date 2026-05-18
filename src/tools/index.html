@@ -205,12 +205,16 @@
         <div id="brush-cursor" class="hidden"></div>
     </div>
 
-    <!-- 
-        关键：使用普通 script 先绑定 UI 事件，
-        再用动态 import 加载 3D 引擎模块。
-        这样即使 CDN 加载失败，按钮也能响应。
-    -->
+    <!-- UI事件先绑定 -->
     <script>
+    // 先绑定文件按钮，确保可以响应
+    document.getElementById('btn-load').addEventListener('click', function() {
+        document.getElementById('file-input').value = '';
+        document.getElementById('file-input').click();
+    });
+    </script>
+    <!-- 主引擎用 module 方式加载，依赖 importmap -->
+    <script type="module">
     (function() {
         'use strict';
 
@@ -351,25 +355,17 @@
 
         async function initEngine() {
             try {
-                // 使用 importmap 中定义的映射来加载
-                setStatus('Loading THREE.js...');
+                // 直接用 importmap 中定义的 bare specifier
                 var THREE = await import('three');
+                setStatus('THREE.js loaded. Loading Spark.js...');
 
-                setStatus('Loading Spark.js...');
                 var sparkModule = null;
                 try {
                     sparkModule = await import('@sparkjsdev/spark');
+                    console.log('[3DGS] Spark.js loaded! Exports:', Object.keys(sparkModule));
                 } catch(sparkErr) {
-                    console.warn('[3DGS] Spark.js load failed:', sparkErr);
-                    console.log(
-                        '%c[3DGS] Spark.js 加载失败。\n' +
-                        '可能原因：网络超时或 sparkjs.dev 访问异常\n' +
-                        '解决办法：\n' +
-                        '1. 刷新页面重试\n' +
-                        '2. 如果反复失败，手动下载 spark.module.js 放到 src/tools/ 目录\n' +
-                        '   然后修改 index.html 中 importmap 的 @sparkjsdev/spark 为 "./spark.module.js"',
-                        'color: orange; font-size: 13px'
-                    );
+                    console.error('[3DGS] Spark.js load FAILED:', sparkErr);
+                    setStatus('Spark.js load error: ' + sparkErr.message);
                 }
 
                 engine = createEngine(THREE, sparkModule);
