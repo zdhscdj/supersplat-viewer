@@ -17,7 +17,7 @@
 <body>
     <div id="app">
         <!-- 3D Canvas -->
-        <canvas id="viewport"></canvas>
+        <canvas id="viewport" tabindex="0"></canvas>
 
         <!-- Top Toolbar -->
         <div id="toolbar">
@@ -545,10 +545,28 @@
                 engineReady = true;
 
                 if (sparkModule) {
-                    setStatus('Ready - WASD/QE move, Mouse drag rotate, Wheel speed | Load File or Folder');
+                    setStatus('Ready - WASD/QE move, Mouse drag rotate, Wheel zoom | Load File or Folder');
                 } else {
                     setStatus('Ready (Spark.js unavailable - see F12 console for fix)');
                 }
+
+                // 绑定 View 面板按钮
+                var btnFrame = document.getElementById('btn-frame');
+                var btnReset = document.getElementById('btn-reset-camera');
+                var fovSlider = document.getElementById('fov-slider');
+                var fovValue = document.getElementById('fov-value');
+
+                if (btnFrame) btnFrame.addEventListener('click', function() {
+                    if (engine && engine.frameScene) engine.frameScene();
+                });
+                if (btnReset) btnReset.addEventListener('click', function() {
+                    if (engine && engine.resetCamera) engine.resetCamera();
+                });
+                if (fovSlider) fovSlider.addEventListener('input', function(e) {
+                    var fov = parseFloat(e.target.value);
+                    if (fovValue) fovValue.textContent = fov;
+                    if (engine && engine.setFov) engine.setFov(fov);
+                });
 
                 // 处理等待中的文件
                 if (pendingFile) {
@@ -626,16 +644,22 @@
             // 让相机使用 YXZ 顺序，避免 gimbal lock
             camera.rotation.order = 'YXZ';
 
-            // 同步初始 yaw/pitch
+            // 同步初始 yaw/pitch (从当前相机方向反推 yaw/pitch)
             function syncEulerFromCamera() {
-                yaw = camera.rotation.y;
-                pitch = camera.rotation.x;
+                // 强制按 YXZ 顺序重新计算 euler，避免顺序不一致
+                var e = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+                yaw = e.y;
+                pitch = e.x;
+                // 清掉 roll，避免画面歪斜
+                camera.rotation.set(pitch, yaw, 0, 'YXZ');
             }
 
             canvas.addEventListener('pointerdown', function(e) {
                 isDown = true; pBtn = e.button;
                 lastX = e.clientX; lastY = e.clientY;
                 canvas.setPointerCapture(e.pointerId);
+                // 让 canvas 获取焦点，确保 WASD 键盘事件
+                if (canvas.focus) canvas.focus();
             });
             canvas.addEventListener('pointermove', function(e) {
                 if (!isDown) return;
@@ -664,12 +688,13 @@
             });
             canvas.addEventListener('wheel', function(e) {
                 e.preventDefault();
-                // 滚轮调整移动速度（指数缩放）
-                moveSpeed *= e.deltaY > 0 ? 0.9 : 1.1;
-                moveSpeed = Math.max(0.01, Math.min(100, moveSpeed));
-                if (statusText) {
-                    statusText.textContent = 'Move speed: ' + moveSpeed.toFixed(2) + ' u/s';
-                }
+                e.stopPropagation();
+                // 滚轮 = 沿视线前进/后退（zoom in/out）
+                // 步长跟随 moveSpeed（场景越大步长越大）
+                var fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                var step = -e.deltaY * 0.002 * Math.max(1, moveSpeed);
+                camera.position.addScaledVector(fwd, step);
+                console.log('[3DGS] wheel zoom:', step.toFixed(3), 'speed:', moveSpeed.toFixed(2));
             }, { passive: false });
             canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
@@ -678,10 +703,15 @@
                 // 忽略输入框中的按键
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
                 keys[e.code] = true;
-            });
+                // Debug: 第一次按键时打印
+                if (!keys._logged && (e.code === 'KeyW' || e.code === 'KeyA' || e.code === 'KeyS' || e.code === 'KeyD')) {
+                    console.log('[3DGS] WASD key detected:', e.code);
+                    keys._logged = true;
+                }
+            }, false);
             window.addEventListener('keyup', function(e) {
                 keys[e.code] = false;
-            });
+            }, false);
 
             // 帧时间用于 WASD 移动速度计算
             var lastFrameTime = performance.now();
@@ -814,115 +844,120 @@
                     var frameAttempts = 0;
                     function autoFrame() {
                         try {
-                            // 优先使用 SIBR cameras.json 的第一个相机姿态
-                            // 注意：SIBR/COLMAP 用的是 World-to-Camera 矩阵 (W2C)，
-                            // 且 Y 轴朝下、Z 轴朝前 (CV/COLMAP 约定)
-                            // Three.js 用的是 Camera-to-World，Y 朝上、Z 朝后 (OpenGL 约定)
-                            if (sceneCameras && sceneCameras.length > 0) {
-                                var cam = sceneCameras[0];
-                                if (cam.position && cam.rotation) {
-                                    // SIBR cameras.json 中的 position 是 camera center in world (C2W translation)
-                                    // rotation 是 W2C 的 3x3 旋转矩阵
-                                    var pos = cam.position;
-                                    var rot = cam.rotation;
-
-                                    // 构造 W2C 旋转矩阵
-                                    var rotMatrix = new THREE.Matrix4();
-                                    if (Array.isArray(rot[0])) {
-                                        rotMatrix.set(
-                                            rot[0][0], rot[0][1], rot[0][2], 0,
-                                            rot[1][0], rot[1][1], rot[1][2], 0,
-                                            rot[2][0], rot[2][1], rot[2][2], 0,
-                                            0, 0, 0, 1
-                                        );
-                                    }
-
-                                    // W2C → C2W: 旋转矩阵转置
-                                    var c2w = rotMatrix.clone().transpose();
-
-                                    // COLMAP 坐标系转 OpenGL 坐标系：翻转 Y 和 Z 轴
-                                    // 即在相机坐标系内乘以 diag(1, -1, -1)
-                                    var flip = new THREE.Matrix4().makeScale(1, -1, -1);
-                                    c2w.multiply(flip);
-
-                                    // 提取四元数
-                                    var q = new THREE.Quaternion();
-                                    q.setFromRotationMatrix(c2w);
-
-                                    // 设置相机
-                                    camera.position.set(pos[0], pos[1], pos[2]);
-                                    camera.quaternion.copy(q);
-                                    syncEulerFromCamera();
-
-                                    // 设置 FOV
-                                    if (cam.fy && cam.height) {
-                                        camera.fov = 2 * Math.atan(cam.height / (2 * cam.fy)) * 180 / Math.PI;
-                                        camera.updateProjectionMatrix();
-                                    }
-
-                                    // 根据场景大小调整移动速度
-                                    if (splatMesh.packedSplats && splatMesh.packedSplats.getBounds) {
-                                        try {
-                                            var b = splatMesh.packedSplats.getBounds();
-                                            if (b && b.radius) moveSpeed = b.radius * 0.5;
-                                        } catch(e) {}
-                                    }
-
-                                    console.log('[3DGS] Camera set from cameras.json[0]:', {
-                                        position: camera.position.toArray(),
-                                        rotation: [pitch, yaw],
-                                        fov: camera.fov
-                                    });
-                                    return;
-                                }
-                            }
-
-                            // 回退：用 bounding box 居中（看向中心）
-                            var center = new THREE.Vector3(0, 0, 0);
-                            var radius = 3;
+                            // 先获取场景边界（用作相机看向的中心点）
+                            var sceneCenter = new THREE.Vector3(0, 0, 0);
+                            var sceneRadius = 3;
 
                             if (splatMesh.packedSplats && splatMesh.packedSplats.getBounds) {
                                 var bounds = splatMesh.packedSplats.getBounds();
                                 if (bounds && bounds.center) {
-                                    center.fromArray(bounds.center);
-                                    radius = bounds.radius || 3;
+                                    sceneCenter.fromArray(bounds.center);
+                                    sceneRadius = bounds.radius || 3;
                                 }
                             } else {
                                 var box = new THREE.Box3().setFromObject(splatMesh);
                                 if (!box.isEmpty()) {
-                                    box.getCenter(center);
+                                    box.getCenter(sceneCenter);
                                     var size = new THREE.Vector3();
                                     box.getSize(size);
-                                    radius = size.length() * 0.5;
+                                    sceneRadius = size.length() * 0.5;
                                 }
                             }
+                            sceneRadius = Math.max(sceneRadius, 0.5);
 
-                            radius = Math.max(radius, 0.5);
-                            // 把相机放到场景外侧，朝向中心
+                            // 使用 SIBR cameras.json 的第一个相机的位置（不用它的旋转，避免倒立问题）
+                            // 直接用 position + lookAt(sceneCenter) 保证朝向正确
+                            if (sceneCameras && sceneCameras.length > 0 && sceneCameras[0].position) {
+                                var pos = sceneCameras[0].position;
+                                camera.position.set(pos[0], pos[1], pos[2]);
+                                camera.up.set(0, 1, 0);
+                                camera.lookAt(sceneCenter);
+                                syncEulerFromCamera();
+
+                                // FOV 从 cameras.json 提取
+                                if (sceneCameras[0].fy && sceneCameras[0].height) {
+                                    camera.fov = 2 * Math.atan(sceneCameras[0].height / (2 * sceneCameras[0].fy)) * 180 / Math.PI;
+                                    camera.updateProjectionMatrix();
+                                }
+
+                                moveSpeed = Math.max(0.1, sceneRadius * 0.3);
+                                console.log('[3DGS] Camera at training pos[0], looking at scene center:', {
+                                    pos: pos,
+                                    center: sceneCenter.toArray(),
+                                    radius: sceneRadius,
+                                    moveSpeed: moveSpeed
+                                });
+                                return;
+                            }
+
+                            // 没有 cameras.json: 把相机放到场景外侧，朝向中心
                             camera.position.set(
-                                center.x + radius * 1.5,
-                                center.y + radius * 0.8,
-                                center.z + radius * 1.5
+                                sceneCenter.x + sceneRadius * 1.5,
+                                sceneCenter.y + sceneRadius * 0.8,
+                                sceneCenter.z + sceneRadius * 1.5
                             );
-                            camera.lookAt(center);
+                            camera.up.set(0, 1, 0);
+                            camera.lookAt(sceneCenter);
                             syncEulerFromCamera();
-                            moveSpeed = radius * 0.5;
-                            console.log('[3DGS] Camera framed - center:', center, 'radius:', radius);
+                            moveSpeed = Math.max(0.1, sceneRadius * 0.3);
+                            console.log('[3DGS] Camera framed - center:', sceneCenter, 'radius:', sceneRadius);
                         } catch(frameErr) {
                             console.warn('Auto frame failed:', frameErr);
                             camera.position.set(3, 2, 5);
+                            camera.up.set(0, 1, 0);
                             camera.lookAt(0, 0, 0);
                             syncEulerFromCamera();
                         }
 
                         frameAttempts++;
-                        if (frameAttempts < 5) setTimeout(autoFrame, 500);
+                        if (frameAttempts < 3) setTimeout(autoFrame, 500);
                     }
                     setTimeout(autoFrame, 500);
 
                     return { splatCount: count };
                 },
-                setMode: function(m) { /* TODO */ }
+                setMode: function(m) { /* TODO */ },
+                frameScene: function() {
+                    if (!splatMesh) return;
+                    var center = new THREE.Vector3();
+                    var radius = 3;
+                    if (splatMesh.packedSplats && splatMesh.packedSplats.getBounds) {
+                        var b = splatMesh.packedSplats.getBounds();
+                        if (b && b.center) { center.fromArray(b.center); radius = b.radius || 3; }
+                    } else {
+                        var box = new THREE.Box3().setFromObject(splatMesh);
+                        if (!box.isEmpty()) { box.getCenter(center); radius = box.getSize(new THREE.Vector3()).length() * 0.5; }
+                    }
+                    radius = Math.max(radius, 0.5);
+                    camera.position.set(center.x + radius * 1.5, center.y + radius * 0.8, center.z + radius * 1.5);
+                    camera.up.set(0, 1, 0);
+                    camera.lookAt(center);
+                    syncEulerFromCamera();
+                    moveSpeed = Math.max(0.1, radius * 0.3);
+                    console.log('[3DGS] frameScene -> center:', center, 'speed:', moveSpeed);
+                },
+                resetCamera: function() {
+                    // 重置到训练相机第一帧（如果有）或默认位置
+                    if (sceneCameras && sceneCameras.length > 0) {
+                        var center = new THREE.Vector3();
+                        if (splatMesh && splatMesh.packedSplats && splatMesh.packedSplats.getBounds) {
+                            var b = splatMesh.packedSplats.getBounds();
+                            if (b && b.center) center.fromArray(b.center);
+                        }
+                        var pos = sceneCameras[0].position;
+                        camera.position.set(pos[0], pos[1], pos[2]);
+                        camera.up.set(0, 1, 0);
+                        camera.lookAt(center);
+                        syncEulerFromCamera();
+                    } else {
+                        this.frameScene();
+                    }
+                    console.log('[3DGS] resetCamera done');
+                },
+                setFov: function(fov) {
+                    camera.fov = fov;
+                    camera.updateProjectionMatrix();
+                }
             };
         }
 
