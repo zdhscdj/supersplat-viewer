@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3DGS Studio - Spark.js 2.0 Tool</title>
     <link rel="stylesheet" href="./tool.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.0.0/spark.module.js"
+        }
+    }
+    </script>
 </head>
 <body>
     <div id="app">
@@ -341,58 +349,26 @@
         // ========== 3D 引擎异步加载 ==========
         setStatus('Loading 3D engine...');
 
-        // 多源回退加载函数
-        async function tryImport(urls) {
-            for (var i = 0; i < urls.length; i++) {
-                try {
-                    setStatus('Trying CDN source ' + (i+1) + '/' + urls.length + '...');
-                    console.log('[3DGS] Trying:', urls[i]);
-                    var m = await import(urls[i]);
-                    console.log('[3DGS] Loaded from:', urls[i]);
-                    return m;
-                } catch(e) {
-                    console.warn('[3DGS] Failed:', urls[i], e.message);
-                }
-            }
-            return null;
-        }
-
-        // CDN 源列表 (按优先级排列)
-        var THREE_URLS = [
-            'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js',
-            'https://unpkg.com/three@0.180.0/build/three.module.js',
-            'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js',
-            'https://esm.sh/three@0.180.0'
-        ];
-
-        var SPARK_URLS = [
-            'https://sparkjs.dev/releases/spark/2.0.0/spark.module.js',
-            'https://cdn.jsdelivr.net/gh/sparkjsdev/spark@main/dist/spark.module.js'
-        ];
-
         async function initEngine() {
             try {
-                // 加载 THREE.js
+                // 使用 importmap 中定义的映射来加载
                 setStatus('Loading THREE.js...');
-                var THREE = await tryImport(THREE_URLS);
-                if (!THREE) {
-                    setStatus('ERROR: Cannot load THREE.js from any CDN. Check internet.');
-                    return;
-                }
+                var THREE = await import('three');
 
-                // 加载 Spark.js
                 setStatus('Loading Spark.js...');
-                var sparkModule = await tryImport(SPARK_URLS);
-                if (!sparkModule) {
-                    console.warn('[3DGS] Spark.js unavailable from all sources');
-                    setStatus('WARNING: Spark.js failed. Try manual download (see console).');
+                var sparkModule = null;
+                try {
+                    sparkModule = await import('@sparkjsdev/spark');
+                } catch(sparkErr) {
+                    console.warn('[3DGS] Spark.js load failed:', sparkErr);
                     console.log(
-                        '%c[3DGS] 解决办法:\n' +
-                        '1. 在浏览器打开: https://sparkjs.dev/releases/spark/2.0.0/spark.module.js\n' +
-                        '2. 如果能访问，保存为 src/tools/spark.module.js\n' +
-                        '3. 修改代码中的 SPARK_URLS 添加 "./spark.module.js"\n' +
-                        '或者使用VPN/代理',
-                        'color: orange; font-size: 14px'
+                        '%c[3DGS] Spark.js 加载失败。\n' +
+                        '可能原因：网络超时或 sparkjs.dev 访问异常\n' +
+                        '解决办法：\n' +
+                        '1. 刷新页面重试\n' +
+                        '2. 如果反复失败，手动下载 spark.module.js 放到 src/tools/ 目录\n' +
+                        '   然后修改 index.html 中 importmap 的 @sparkjsdev/spark 为 "./spark.module.js"',
+                        'color: orange; font-size: 13px'
                     );
                 }
 
