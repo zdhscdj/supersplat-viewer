@@ -400,14 +400,22 @@
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.setClearColor(0x1a1a2e);
 
-            // Spark renderer
+            // Spark renderer - 必须传入 renderer
             var sparkRenderer = null;
             if (sparkModule && sparkModule.SparkRenderer) {
                 try {
-                    sparkRenderer = new sparkModule.SparkRenderer();
+                    sparkRenderer = new sparkModule.SparkRenderer({ renderer: renderer });
                     scene.add(sparkRenderer);
+                    console.log('[3DGS] SparkRenderer initialized');
                 } catch(e) {
                     console.warn('SparkRenderer init failed:', e);
+                    // 尝试不带参数
+                    try {
+                        sparkRenderer = new sparkModule.SparkRenderer();
+                        scene.add(sparkRenderer);
+                    } catch(e2) {
+                        console.warn('SparkRenderer fallback failed:', e2);
+                    }
                 }
             }
 
@@ -421,9 +429,10 @@
             dirLight.position.set(5, 10, 5);
             scene.add(dirLight);
 
-            // State
-            var splatMesh = null;
-            var frameCount = 0, lastFpsTime = performance.now(), fps = 0;
+            // Also adjust camera near/far planes for various model scales
+            camera.near = 0.001;
+            camera.far = 10000;
+            camera.updateProjectionMatrix();
 
             // Orbit controls (inline simple version)
             var target = new THREE.Vector3(0, 0, 0);
@@ -459,7 +468,7 @@
             canvas.addEventListener('wheel', function(e) {
                 e.preventDefault();
                 spherical.radius *= 1 + e.deltaY * 0.001;
-                spherical.radius = Math.max(0.1, Math.min(100, spherical.radius));
+                spherical.radius = Math.max(0.001, Math.min(10000, spherical.radius));
             }, { passive: false });
             canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
@@ -510,19 +519,15 @@
                     var url = URL.createObjectURL(file);
                     var ext = file.name.split('.').pop().toLowerCase();
 
-                    // Spark.js 正确用法: 通过构造函数 { url, fileType } 加载
-                    var opts = { url: url };
-                    // .ply 和 .spz 可以自动检测格式，.splat 和 .ksplat 需要指定 fileType
-                    if (ext === 'splat' || ext === 'ksplat') {
-                        opts.fileType = ext;
-                    }
+                    // 重要: blob URL 没有扩展名后缀，必须显式指定 fileType
+                    var opts = { url: url, fileType: ext };
+                    console.log('[3DGS] Creating SplatMesh with:', opts);
 
                     var newMesh;
                     try {
                         newMesh = new sparkModule.SplatMesh(opts);
                     } catch(constructErr) {
                         console.error('SplatMesh constructor error:', constructErr);
-                        // 回退：尝试无参构造 + loadAsync
                         try {
                             newMesh = new sparkModule.SplatMesh();
                             if (newMesh.loadAsync) {
@@ -538,6 +543,7 @@
 
                     splatMesh = newMesh;
                     scene.add(splatMesh);
+                    console.log('[3DGS] SplatMesh added to scene:', splatMesh);
 
                     if (onProgress) onProgress(1);
 
@@ -562,22 +568,46 @@
 
                     if (onProgress) onProgress(1);
 
-                    // Auto frame
-                    setTimeout(function() {
+                    // Auto frame - 多次尝试，因为 Spark 异步初始化 bounding box
+                    var frameAttempts = 0;
+                    function autoFrame() {
                         try {
-                            var box = new THREE.Box3().setFromObject(splatMesh);
-                            if (!box.isEmpty()) {
-                                var center = new THREE.Vector3();
-                                box.getCenter(center);
-                                var size = new THREE.Vector3();
-                                box.getSize(size);
-                                target.copy(center);
-                                spherical.radius = Math.max(size.length() * 0.7, 1);
+                            // Spark.js 自带的 packedSplats.bounds 更准确
+                            var center = new THREE.Vector3(0, 0, 0);
+                            var radius = 3;
+
+                            if (splatMesh.packedSplats && splatMesh.packedSplats.getBounds) {
+                                var bounds = splatMesh.packedSplats.getBounds();
+                                if (bounds && bounds.center) {
+                                    center.fromArray(bounds.center);
+                                    radius = bounds.radius || 3;
+                                }
+                            } else {
+                                var box = new THREE.Box3().setFromObject(splatMesh);
+                                if (!box.isEmpty()) {
+                                    box.getCenter(center);
+                                    var size = new THREE.Vector3();
+                                    box.getSize(size);
+                                    radius = size.length() * 0.5;
+                                }
                             }
+
+                            // 安全的相机距离
+                            radius = Math.max(radius, 0.5);
+                            target.copy(center);
+                            spherical.radius = radius * 2.5;
+                            console.log('[3DGS] Camera framed - center:', center, 'radius:', spherical.radius);
                         } catch(frameErr) {
                             console.warn('Auto frame failed:', frameErr);
+                            // 失败也设置一个合理的默认相机
+                            target.set(0, 0, 0);
+                            spherical.radius = 5;
                         }
-                    }, 300);
+
+                        frameAttempts++;
+                        if (frameAttempts < 5) setTimeout(autoFrame, 500);
+                    }
+                    setTimeout(autoFrame, 500);
 
                     return { splatCount: count };
                 },
