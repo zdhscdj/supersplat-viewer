@@ -814,8 +814,12 @@
                     }
 
                     splatMesh = newMesh;
+                    // 3DGS/COLMAP 坐标系: Y朝下, Z朝前
+                    // Three.js 坐标系: Y朝上, Z朝后
+                    // 绕X轴旋转180° 让场景正立显示
+                    splatMesh.rotation.x = Math.PI;
                     scene.add(splatMesh);
-                    console.log('[3DGS] SplatMesh added to scene:', splatMesh);
+                    console.log('[3DGS] SplatMesh added to scene (rotated 180° around X):', splatMesh);
 
                     if (onProgress) onProgress(1);
 
