@@ -1,8 +1,21 @@
 /**
  * Scene Manager - THREE.js + Spark.js 2.0 scene setup
+ * Handles graceful fallback if Spark fails to initialize
  */
 import * as THREE from 'three';
-import { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+
+let SparkRenderer, SplatMesh;
+let sparkAvailable = false;
+
+try {
+    const spark = await import('@sparkjsdev/spark');
+    SparkRenderer = spark.SparkRenderer;
+    SplatMesh = spark.SplatMesh;
+    sparkAvailable = true;
+    console.log('[SceneManager] Spark.js loaded successfully');
+} catch (err) {
+    console.warn('[SceneManager] Spark.js failed to load, 3DGS features unavailable:', err);
+}
 
 export class SceneManager {
     constructor(canvas) {
@@ -16,9 +29,16 @@ export class SceneManager {
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.setClearColor(0x1a1a2e);
 
-        // Spark renderer for 3DGS
-        this.sparkRenderer = new SparkRenderer();
-        this.scene.add(this.sparkRenderer);
+        // Spark renderer for 3DGS (optional)
+        this.sparkRenderer = null;
+        if (sparkAvailable && SparkRenderer) {
+            try {
+                this.sparkRenderer = new SparkRenderer();
+                this.scene.add(this.sparkRenderer);
+            } catch (e) {
+                console.warn('[SceneManager] SparkRenderer init failed:', e);
+            }
+        }
 
         // Helpers
         this.gridHelper = new THREE.GridHelper(10, 20, 0x333366, 0x222244);
@@ -53,18 +73,23 @@ export class SceneManager {
     }
 
     async loadModel(fileOrUrl, onProgress) {
+        if (!sparkAvailable || !SplatMesh) {
+            throw new Error('Spark.js not available. Cannot load splat models. Check internet connection.');
+        }
+
         // Remove existing splat
         if (this.splatMesh) {
             this.scene.remove(this.splatMesh);
-            this.splatMesh.dispose?.();
+            if (this.splatMesh.dispose) this.splatMesh.dispose();
             this.splatMesh = null;
         }
 
         const splatMesh = new SplatMesh();
 
         if (typeof fileOrUrl === 'string') {
+            // URL string
             await splatMesh.loadAsync(fileOrUrl, (event) => {
-                if (event.lengthComputable && onProgress) {
+                if (event && event.lengthComputable && onProgress) {
                     onProgress(event.loaded / event.total);
                 }
             });
@@ -72,11 +97,23 @@ export class SceneManager {
             // File object - create object URL
             const url = URL.createObjectURL(fileOrUrl);
             const ext = fileOrUrl.name.split('.').pop().toLowerCase();
-            await splatMesh.loadAsync(url, { fileType: ext }, (event) => {
-                if (event.lengthComputable && onProgress) {
-                    onProgress(event.loaded / event.total);
+            try {
+                // Spark.js loadAsync signature: loadAsync(url, options?, onProgress?)
+                await splatMesh.loadAsync(url, { fileType: ext });
+                if (onProgress) onProgress(1);
+            } catch (loadErr) {
+                // Try alternative signature: loadAsync(url, onProgress)
+                try {
+                    await splatMesh.loadAsync(url, (event) => {
+                        if (event && event.lengthComputable && onProgress) {
+                            onProgress(event.loaded / event.total);
+                        }
+                    });
+                } catch (loadErr2) {
+                    URL.revokeObjectURL(url);
+                    throw loadErr2;
                 }
-            });
+            }
             URL.revokeObjectURL(url);
         }
 
@@ -84,15 +121,21 @@ export class SceneManager {
         this.scene.add(splatMesh);
 
         // Get splat count
-        this.splatCount = splatMesh.packedSplats?.splatCount ?? 0;
+        this.splatCount = splatMesh.packedSplats?.splatCount ?? splatMesh.count ?? 0;
 
         return { splatCount: this.splatCount };
     }
 
     getBoundingBox() {
-        if (!this.splatMesh) return new THREE.Box3();
+        if (!this.splatMesh) {
+            return new THREE.Box3(new THREE.Vector3(-1,-1,-1), new THREE.Vector3(1,1,1));
+        }
         const box = new THREE.Box3();
         box.setFromObject(this.splatMesh);
+        // Fallback if box is empty
+        if (box.isEmpty()) {
+            return new THREE.Box3(new THREE.Vector3(-1,-1,-1), new THREE.Vector3(1,1,1));
+        }
         return box;
     }
 
@@ -107,7 +150,7 @@ export class SceneManager {
         const box = this.getBoundingBox();
         const size = new THREE.Vector3();
         box.getSize(size);
-        return size.length();
+        return size.length() || 2;
     }
 
     render() {
@@ -124,8 +167,8 @@ export class SceneManager {
 
     dispose() {
         this.renderer.dispose();
-        if (this.splatMesh) {
-            this.splatMesh.dispose?.();
+        if (this.splatMesh && this.splatMesh.dispose) {
+            this.splatMesh.dispose();
         }
     }
 }
