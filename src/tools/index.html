@@ -5,14 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3DGS Studio - Spark.js 2.0 Tool</title>
     <link rel="stylesheet" href="./tool.css">
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
-            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.0.0/spark.module.js"
-        }
-    }
-    </script>
 </head>
 <body>
     <div id="app">
@@ -187,7 +179,7 @@
 
         <!-- Status Bar -->
         <div id="status-bar">
-            <span id="status-text">Ready - Drop a .ply/.splat/.spz/.ksplat file to begin</span>
+            <span id="status-text">Initializing...</span>
             <span id="splat-count">Splats: 0</span>
             <span id="fps-counter">FPS: 0</span>
         </div>
@@ -205,6 +197,358 @@
         <div id="brush-cursor" class="hidden"></div>
     </div>
 
-    <script type="module" src="./tool.js"></script>
+    <!-- 
+        关键：使用普通 script 先绑定 UI 事件，
+        再用动态 import 加载 3D 引擎模块。
+        这样即使 CDN 加载失败，按钮也能响应。
+    -->
+    <script>
+    (function() {
+        'use strict';
+
+        // ========== 状态 ==========
+        var engine = null;       // 3D engine (lazy loaded)
+        var pendingFile = null;  // 如果用户在引擎加载前就选了文件
+        var mode = 'view';
+        var engineReady = false;
+
+        // ========== UI 引用 ==========
+        var statusText = document.getElementById('status-text');
+        var splatCount = document.getElementById('splat-count');
+        var fpsCounter = document.getElementById('fps-counter');
+        var loadingOverlay = document.getElementById('loading-overlay');
+        var loadingTextEl = document.getElementById('loading-text');
+        var loadingProgress = document.getElementById('loading-progress');
+
+        function setStatus(text) {
+            if (statusText) statusText.textContent = text;
+            console.log('[3DGS Studio] ' + text);
+        }
+
+        function showLoading(text) {
+            if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+            if (loadingTextEl) loadingTextEl.textContent = text;
+            if (loadingProgress) loadingProgress.style.width = '0%';
+        }
+
+        function hideLoading() {
+            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+        }
+
+        // ========== 文件加载按钮（立即绑定）==========
+        var fileInput = document.getElementById('file-input');
+        var btnLoad = document.getElementById('btn-load');
+
+        btnLoad.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            fileInput.value = '';
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', function(e) {
+            var files = e.target.files;
+            if (!files || files.length === 0) return;
+            var file = files[0];
+            var ext = file.name.split('.').pop().toLowerCase();
+
+            if (['ply', 'splat', 'spz', 'ksplat'].indexOf(ext) === -1) {
+                setStatus('Unsupported format. Use .ply, .splat, .spz, or .ksplat');
+                return;
+            }
+
+            setStatus('File selected: ' + file.name);
+
+            if (engineReady && engine) {
+                loadModelFile(file);
+            } else {
+                pendingFile = file;
+                setStatus('File queued: ' + file.name + ' (waiting for engine...)');
+            }
+        });
+
+        // ========== 拖拽 ==========
+        var appEl = document.getElementById('app');
+
+        appEl.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            appEl.classList.add('drag-over');
+        });
+        appEl.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            appEl.classList.remove('drag-over');
+        });
+        appEl.addEventListener('drop', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            appEl.classList.remove('drag-over');
+            var files = e.dataTransfer && e.dataTransfer.files;
+            if (!files || files.length === 0) return;
+            var file = files[0];
+            if (engineReady && engine) {
+                loadModelFile(file);
+            } else {
+                pendingFile = file;
+                setStatus('File queued: ' + file.name + ' (waiting for engine...)');
+            }
+        });
+
+        // ========== Mode 切换 ==========
+        document.querySelectorAll('.mode-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                setMode(btn.dataset.mode);
+            });
+        });
+
+        function setMode(newMode) {
+            mode = newMode;
+            document.querySelectorAll('.mode-btn').forEach(function(btn) {
+                btn.classList.toggle('active', btn.dataset.mode === mode);
+            });
+            document.querySelectorAll('.panel-section').forEach(function(panel) {
+                panel.classList.toggle('hidden', panel.dataset.panel !== mode);
+            });
+            var timeline = document.getElementById('timeline');
+            if (timeline) timeline.classList.toggle('hidden', mode !== 'path');
+
+            if (engine && engine.setMode) engine.setMode(mode);
+            setStatus('Mode: ' + mode.charAt(0).toUpperCase() + mode.slice(1));
+        }
+
+        // ========== 加载模型 ==========
+        async function loadModelFile(file) {
+            if (!engine) {
+                setStatus('Engine not ready');
+                return;
+            }
+            showLoading('Loading ' + file.name + '...');
+            try {
+                var result = await engine.loadModel(file, function(progress) {
+                    if (loadingProgress) loadingProgress.style.width = (progress * 100) + '%';
+                    if (loadingTextEl) loadingTextEl.textContent = 'Loading... ' + Math.round(progress * 100) + '%';
+                });
+                hideLoading();
+                if (splatCount) splatCount.textContent = 'Splats: ' + (result.splatCount || 0).toLocaleString();
+                setStatus('Loaded ' + file.name + ' - ' + (result.splatCount || 0).toLocaleString() + ' splats');
+            } catch (err) {
+                hideLoading();
+                setStatus('Load error: ' + err.message);
+                console.error(err);
+            }
+        }
+
+        // ========== 3D 引擎异步加载 ==========
+        setStatus('Loading 3D engine...');
+
+        // 动态插入 importmap
+        var importMapScript = document.createElement('script');
+        importMapScript.type = 'importmap';
+        importMapScript.textContent = JSON.stringify({
+            imports: {
+                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
+                "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.0.0/spark.module.js"
+            }
+        });
+        // importmap 必须在任何 module script 之前插入，但页面已加载
+        // 所以我们用 blob URL 方式加载模块引擎
+
+        // 使用 blob import 绕过 importmap 限制
+        async function initEngine() {
+            try {
+                // 直接用绝对 URL 导入
+                var THREE = await import('https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js');
+
+                var sparkModule = null;
+                try {
+                    sparkModule = await import('https://sparkjs.dev/releases/spark/2.0.0/spark.module.js');
+                } catch(sparkErr) {
+                    console.warn('Spark.js load failed, will try without:', sparkErr);
+                }
+
+                engine = createEngine(THREE, sparkModule);
+                engineReady = true;
+                setStatus('Ready - Drop a .ply/.splat/.spz/.ksplat file or click Load');
+
+                // 处理等待中的文件
+                if (pendingFile) {
+                    var f = pendingFile;
+                    pendingFile = null;
+                    loadModelFile(f);
+                }
+            } catch(err) {
+                console.error('Engine load failed:', err);
+                setStatus('Engine load failed: ' + err.message + ' — Check internet/CDN access');
+            }
+        }
+
+        function createEngine(THREE, sparkModule) {
+            var canvas = document.getElementById('viewport');
+            var scene = new THREE.Scene();
+            var camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 1000);
+            camera.position.set(2, 1.5, 3);
+
+            var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x1a1a2e);
+
+            // Spark renderer
+            var sparkRenderer = null;
+            if (sparkModule && sparkModule.SparkRenderer) {
+                try {
+                    sparkRenderer = new sparkModule.SparkRenderer();
+                    scene.add(sparkRenderer);
+                } catch(e) {
+                    console.warn('SparkRenderer init failed:', e);
+                }
+            }
+
+            // Grid
+            var grid = new THREE.GridHelper(10, 20, 0x333366, 0x222244);
+            scene.add(grid);
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            var dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 5);
+            scene.add(dirLight);
+
+            // State
+            var splatMesh = null;
+            var frameCount = 0, lastFpsTime = performance.now(), fps = 0;
+
+            // Orbit controls (inline simple version)
+            var target = new THREE.Vector3(0, 0, 0);
+            var spherical = { radius: 5, phi: Math.PI / 3, theta: Math.PI / 4 };
+            var isDown = false, pBtn = -1, lastX = 0, lastY = 0;
+
+            canvas.addEventListener('pointerdown', function(e) {
+                isDown = true; pBtn = e.button;
+                lastX = e.clientX; lastY = e.clientY;
+                canvas.setPointerCapture(e.pointerId);
+            });
+            canvas.addEventListener('pointermove', function(e) {
+                if (!isDown) return;
+                var dx = e.clientX - lastX, dy = e.clientY - lastY;
+                lastX = e.clientX; lastY = e.clientY;
+                if (pBtn === 0) {
+                    spherical.theta -= dx * 0.005;
+                    spherical.phi -= dy * 0.005;
+                    spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01, spherical.phi));
+                } else if (pBtn === 2) {
+                    var right = new THREE.Vector3();
+                    var up = new THREE.Vector3();
+                    right.setFromMatrixColumn(camera.matrixWorld, 0);
+                    up.setFromMatrixColumn(camera.matrixWorld, 1);
+                    target.addScaledVector(right, -dx * 0.003 * spherical.radius * 0.5);
+                    target.addScaledVector(up, dy * 0.003 * spherical.radius * 0.5);
+                }
+            });
+            canvas.addEventListener('pointerup', function(e) {
+                isDown = false; pBtn = -1;
+                canvas.releasePointerCapture(e.pointerId);
+            });
+            canvas.addEventListener('wheel', function(e) {
+                e.preventDefault();
+                spherical.radius *= 1 + e.deltaY * 0.001;
+                spherical.radius = Math.max(0.1, Math.min(100, spherical.radius));
+            }, { passive: false });
+            canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+            function updateCamera() {
+                var x = spherical.radius * Math.sin(spherical.phi) * Math.cos(spherical.theta);
+                var y = spherical.radius * Math.cos(spherical.phi);
+                var z = spherical.radius * Math.sin(spherical.phi) * Math.sin(spherical.theta);
+                camera.position.set(target.x + x, target.y + y, target.z + z);
+                camera.lookAt(target);
+            }
+
+            // Resize
+            window.addEventListener('resize', function() {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            // Render loop
+            function loop() {
+                requestAnimationFrame(loop);
+                updateCamera();
+                renderer.render(scene, camera);
+                frameCount++;
+                var now = performance.now();
+                if (now - lastFpsTime >= 1000) {
+                    fps = frameCount;
+                    frameCount = 0;
+                    lastFpsTime = now;
+                    if (fpsCounter) fpsCounter.textContent = 'FPS: ' + fps;
+                }
+            }
+            loop();
+
+            // API
+            return {
+                loadModel: async function(file, onProgress) {
+                    if (!sparkModule || !sparkModule.SplatMesh) {
+                        throw new Error('Spark.js not loaded. Cannot load splat files.');
+                    }
+
+                    if (splatMesh) {
+                        scene.remove(splatMesh);
+                        if (splatMesh.dispose) splatMesh.dispose();
+                        splatMesh = null;
+                    }
+
+                    var newMesh = new sparkModule.SplatMesh();
+                    var url = URL.createObjectURL(file);
+                    var ext = file.name.split('.').pop().toLowerCase();
+
+                    try {
+                        await newMesh.loadAsync(url, { fileType: ext });
+                    } catch(e1) {
+                        try {
+                            await newMesh.loadAsync(url);
+                        } catch(e2) {
+                            URL.revokeObjectURL(url);
+                            throw e2;
+                        }
+                    }
+                    URL.revokeObjectURL(url);
+
+                    splatMesh = newMesh;
+                    scene.add(splatMesh);
+
+                    if (onProgress) onProgress(1);
+
+                    var count = 0;
+                    if (splatMesh.packedSplats && splatMesh.packedSplats.splatCount) {
+                        count = splatMesh.packedSplats.splatCount;
+                    }
+
+                    // Auto frame
+                    setTimeout(function() {
+                        var box = new THREE.Box3().setFromObject(splatMesh);
+                        if (!box.isEmpty()) {
+                            var center = new THREE.Vector3();
+                            box.getCenter(center);
+                            var size = new THREE.Vector3();
+                            box.getSize(size);
+                            target.copy(center);
+                            spherical.radius = size.length() * 0.7;
+                        }
+                    }, 300);
+
+                    return { splatCount: count };
+                },
+                setMode: function(m) { /* TODO */ }
+            };
+        }
+
+        // 启动引擎加载
+        initEngine();
+
+    })();
+    </script>
 </body>
 </html>
