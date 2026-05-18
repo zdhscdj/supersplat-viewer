@@ -545,7 +545,7 @@
                 engineReady = true;
 
                 if (sparkModule) {
-                    setStatus('Ready - Drop a .ply/.splat/.spz/.ksplat file or click Load');
+                    setStatus('Ready - WASD/QE move, Mouse drag rotate, Wheel speed | Load File or Folder');
                 } else {
                     setStatus('Ready (Spark.js unavailable - see F12 console for fix)');
                 }
@@ -613,10 +613,24 @@
             var lastFpsTime = performance.now();
             var fps = 0;
 
-            // Orbit controls (inline simple version)
-            var target = new THREE.Vector3(0, 0, 0);
-            var spherical = { radius: 5, phi: Math.PI / 3, theta: Math.PI / 4 };
+            // ========== FPS-style 自由飞行控制 ==========
+            // 使用 yaw/pitch 欧拉角，避免 spherical 的限位
+            // 鼠标拖动 = 旋转视角；WASD/QE = 移动；滚轮 = 调整移动速度
+            var yaw = 0;          // 水平角（绕 Y 轴）
+            var pitch = 0;        // 垂直角（绕 X 轴），允许 -90~+90
+            var moveSpeed = 1.0;  // 单位 米/秒
+            var rotateSpeed = 0.003;
+            var keys = {};
             var isDown = false, pBtn = -1, lastX = 0, lastY = 0;
+
+            // 让相机使用 YXZ 顺序，避免 gimbal lock
+            camera.rotation.order = 'YXZ';
+
+            // 同步初始 yaw/pitch
+            function syncEulerFromCamera() {
+                yaw = camera.rotation.y;
+                pitch = camera.rotation.x;
+            }
 
             canvas.addEventListener('pointerdown', function(e) {
                 isDown = true; pBtn = e.button;
@@ -627,17 +641,21 @@
                 if (!isDown) return;
                 var dx = e.clientX - lastX, dy = e.clientY - lastY;
                 lastX = e.clientX; lastY = e.clientY;
-                if (pBtn === 0) {
-                    spherical.theta -= dx * 0.005;
-                    spherical.phi -= dy * 0.005;
-                    spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01, spherical.phi));
-                } else if (pBtn === 2) {
+
+                if (pBtn === 0 || pBtn === 2) {
+                    // 左键/右键：旋转视角（FPS 鼠标视角）
+                    yaw -= dx * rotateSpeed;
+                    pitch -= dy * rotateSpeed;
+                    // 不限位 — 允许完全任意角度（虽然 pitch>90度会上下翻转）
+                    pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, pitch));
+                } else if (pBtn === 1) {
+                    // 中键：平移
                     var right = new THREE.Vector3();
                     var up = new THREE.Vector3();
                     right.setFromMatrixColumn(camera.matrixWorld, 0);
                     up.setFromMatrixColumn(camera.matrixWorld, 1);
-                    target.addScaledVector(right, -dx * 0.003 * spherical.radius * 0.5);
-                    target.addScaledVector(up, dy * 0.003 * spherical.radius * 0.5);
+                    camera.position.addScaledVector(right, -dx * 0.005 * moveSpeed);
+                    camera.position.addScaledVector(up, dy * 0.005 * moveSpeed);
                 }
             });
             canvas.addEventListener('pointerup', function(e) {
@@ -646,17 +664,62 @@
             });
             canvas.addEventListener('wheel', function(e) {
                 e.preventDefault();
-                spherical.radius *= 1 + e.deltaY * 0.001;
-                spherical.radius = Math.max(0.001, Math.min(10000, spherical.radius));
+                // 滚轮调整移动速度（指数缩放）
+                moveSpeed *= e.deltaY > 0 ? 0.9 : 1.1;
+                moveSpeed = Math.max(0.01, Math.min(100, moveSpeed));
+                if (statusText) {
+                    statusText.textContent = 'Move speed: ' + moveSpeed.toFixed(2) + ' u/s';
+                }
             }, { passive: false });
             canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
+            // 键盘事件 - 全局监听
+            window.addEventListener('keydown', function(e) {
+                // 忽略输入框中的按键
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+                keys[e.code] = true;
+            });
+            window.addEventListener('keyup', function(e) {
+                keys[e.code] = false;
+            });
+
+            // 帧时间用于 WASD 移动速度计算
+            var lastFrameTime = performance.now();
+
             function updateCamera() {
-                var x = spherical.radius * Math.sin(spherical.phi) * Math.cos(spherical.theta);
-                var y = spherical.radius * Math.cos(spherical.phi);
-                var z = spherical.radius * Math.sin(spherical.phi) * Math.sin(spherical.theta);
-                camera.position.set(target.x + x, target.y + y, target.z + z);
-                camera.lookAt(target);
+                var now = performance.now();
+                var dt = Math.min(0.1, (now - lastFrameTime) / 1000);
+                lastFrameTime = now;
+
+                // 应用 yaw/pitch 到相机旋转
+                camera.rotation.set(pitch, yaw, 0, 'YXZ');
+
+                // WASD 移动
+                var dir = new THREE.Vector3();
+                if (keys['KeyW']) dir.z -= 1;
+                if (keys['KeyS']) dir.z += 1;
+                if (keys['KeyA']) dir.x -= 1;
+                if (keys['KeyD']) dir.x += 1;
+                if (keys['KeyE'] || keys['Space']) dir.y += 1;
+                if (keys['KeyQ'] || keys['ShiftLeft'] || keys['ControlLeft']) dir.y -= 1;
+
+                if (dir.lengthSq() > 0) {
+                    dir.normalize();
+                    // 加速键
+                    var spd = moveSpeed;
+                    if (keys['ShiftRight']) spd *= 4;
+                    dir.multiplyScalar(spd * dt);
+                    // 应用到相机本地坐标
+                    dir.applyQuaternion(camera.quaternion);
+                    camera.position.add(dir);
+                }
+            }
+
+            // 暴露给 API：从外部设置相机姿态
+            function setCameraPose(position, quaternion) {
+                camera.position.copy(position);
+                camera.quaternion.copy(quaternion);
+                syncEulerFromCamera();
             }
 
             // Resize
@@ -752,39 +815,69 @@
                     function autoFrame() {
                         try {
                             // 优先使用 SIBR cameras.json 的第一个相机姿态
+                            // 注意：SIBR/COLMAP 用的是 World-to-Camera 矩阵 (W2C)，
+                            // 且 Y 轴朝下、Z 轴朝前 (CV/COLMAP 约定)
+                            // Three.js 用的是 Camera-to-World，Y 朝上、Z 朝后 (OpenGL 约定)
                             if (sceneCameras && sceneCameras.length > 0) {
                                 var cam = sceneCameras[0];
                                 if (cam.position && cam.rotation) {
+                                    // SIBR cameras.json 中的 position 是 camera center in world (C2W translation)
+                                    // rotation 是 W2C 的 3x3 旋转矩阵
                                     var pos = cam.position;
-                                    camera.position.set(pos[0], pos[1], pos[2]);
-                                    // SIBR 的 rotation 是 3x3 矩阵 (row-major)
                                     var rot = cam.rotation;
+
+                                    // 构造 W2C 旋转矩阵
+                                    var rotMatrix = new THREE.Matrix4();
                                     if (Array.isArray(rot[0])) {
-                                        var m = new THREE.Matrix4();
-                                        m.set(
+                                        rotMatrix.set(
                                             rot[0][0], rot[0][1], rot[0][2], 0,
                                             rot[1][0], rot[1][1], rot[1][2], 0,
                                             rot[2][0], rot[2][1], rot[2][2], 0,
                                             0, 0, 0, 1
                                         );
-                                        camera.quaternion.setFromRotationMatrix(m);
                                     }
-                                    // 用相机正前方做轨道目标
-                                    var fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-                                    target.copy(camera.position).add(fwd.multiplyScalar(3));
-                                    var d = camera.position.distanceTo(target);
-                                    spherical.setFromVector3(camera.position.clone().sub(target));
-                                    spherical.radius = d;
+
+                                    // W2C → C2W: 旋转矩阵转置
+                                    var c2w = rotMatrix.clone().transpose();
+
+                                    // COLMAP 坐标系转 OpenGL 坐标系：翻转 Y 和 Z 轴
+                                    // 即在相机坐标系内乘以 diag(1, -1, -1)
+                                    var flip = new THREE.Matrix4().makeScale(1, -1, -1);
+                                    c2w.multiply(flip);
+
+                                    // 提取四元数
+                                    var q = new THREE.Quaternion();
+                                    q.setFromRotationMatrix(c2w);
+
+                                    // 设置相机
+                                    camera.position.set(pos[0], pos[1], pos[2]);
+                                    camera.quaternion.copy(q);
+                                    syncEulerFromCamera();
+
+                                    // 设置 FOV
                                     if (cam.fy && cam.height) {
                                         camera.fov = 2 * Math.atan(cam.height / (2 * cam.fy)) * 180 / Math.PI;
                                         camera.updateProjectionMatrix();
                                     }
-                                    console.log('[3DGS] Camera set from cameras.json[0]');
+
+                                    // 根据场景大小调整移动速度
+                                    if (splatMesh.packedSplats && splatMesh.packedSplats.getBounds) {
+                                        try {
+                                            var b = splatMesh.packedSplats.getBounds();
+                                            if (b && b.radius) moveSpeed = b.radius * 0.5;
+                                        } catch(e) {}
+                                    }
+
+                                    console.log('[3DGS] Camera set from cameras.json[0]:', {
+                                        position: camera.position.toArray(),
+                                        rotation: [pitch, yaw],
+                                        fov: camera.fov
+                                    });
                                     return;
                                 }
                             }
 
-                            // 回退：用 bounding box 居中
+                            // 回退：用 bounding box 居中（看向中心）
                             var center = new THREE.Vector3(0, 0, 0);
                             var radius = 3;
 
@@ -805,13 +898,21 @@
                             }
 
                             radius = Math.max(radius, 0.5);
-                            target.copy(center);
-                            spherical.radius = radius * 2.5;
-                            console.log('[3DGS] Camera framed - center:', center, 'radius:', spherical.radius);
+                            // 把相机放到场景外侧，朝向中心
+                            camera.position.set(
+                                center.x + radius * 1.5,
+                                center.y + radius * 0.8,
+                                center.z + radius * 1.5
+                            );
+                            camera.lookAt(center);
+                            syncEulerFromCamera();
+                            moveSpeed = radius * 0.5;
+                            console.log('[3DGS] Camera framed - center:', center, 'radius:', radius);
                         } catch(frameErr) {
                             console.warn('Auto frame failed:', frameErr);
-                            target.set(0, 0, 0);
-                            spherical.radius = 5;
+                            camera.position.set(3, 2, 5);
+                            camera.lookAt(0, 0, 0);
+                            syncEulerFromCamera();
                         }
 
                         frameAttempts++;
