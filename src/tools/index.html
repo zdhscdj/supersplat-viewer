@@ -666,14 +666,13 @@
                 var dx = e.clientX - lastX, dy = e.clientY - lastY;
                 lastX = e.clientX; lastY = e.clientY;
 
-                if (pBtn === 0 || pBtn === 2) {
-                    // 左键/右键：旋转视角（FPS 鼠标视角）
+                if (pBtn === 0) {
+                    // 左键：旋转视角（FPS 鼠标视角）
                     yaw -= dx * rotateSpeed;
                     pitch -= dy * rotateSpeed;
-                    // 不限位 — 允许完全任意角度（虽然 pitch>90度会上下翻转）
                     pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, pitch));
-                } else if (pBtn === 1) {
-                    // 中键：平移
+                } else if (pBtn === 2 || pBtn === 1) {
+                    // 右键/中键：平移
                     var right = new THREE.Vector3();
                     var up = new THREE.Vector3();
                     right.setFromMatrixColumn(camera.matrixWorld, 0);
@@ -869,11 +868,12 @@
                             }
                             sceneRadius = Math.max(sceneRadius, 0.5);
 
-                            // 使用 SIBR cameras.json 的第一个相机的位置（不用它的旋转，避免倒立问题）
-                            // 直接用 position + lookAt(sceneCenter) 保证朝向正确
+                            // 使用 SIBR cameras.json 的第一个相机的位置
+                            // 相机放在训练位置，但高度对齐场景中心（避免俯视/仰视）
                             if (sceneCameras && sceneCameras.length > 0 && sceneCameras[0].position) {
                                 var pos = sceneCameras[0].position;
-                                camera.position.set(pos[0], pos[1], pos[2]);
+                                // 把相机放在训练位的 X/Z，但 Y 设为场景中心的 Y（水平视线）
+                                camera.position.set(pos[0], sceneCenter.y, pos[2]);
                                 camera.up.set(0, 1, 0);
                                 camera.lookAt(sceneCenter);
                                 syncEulerFromCamera();
@@ -894,11 +894,11 @@
                                 return;
                             }
 
-                            // 没有 cameras.json: 把相机放到场景外侧，朝向中心
+                            // 没有 cameras.json: 把相机放到场景侧面，与中心同高，水平看向中心
                             camera.position.set(
-                                sceneCenter.x + sceneRadius * 1.5,
-                                sceneCenter.y + sceneRadius * 0.8,
-                                sceneCenter.z + sceneRadius * 1.5
+                                sceneCenter.x + sceneRadius * 2,
+                                sceneCenter.y,
+                                sceneCenter.z + sceneRadius * 2
                             );
                             camera.up.set(0, 1, 0);
                             camera.lookAt(sceneCenter);
