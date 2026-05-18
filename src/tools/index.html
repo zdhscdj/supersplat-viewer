@@ -22,11 +22,16 @@
         <!-- Top Toolbar -->
         <div id="toolbar">
             <div class="toolbar-group">
-                <button id="btn-load" class="tool-btn" title="Load Model (.ply/.splat/.spz/.ksplat)">
+                <button id="btn-load" class="tool-btn" title="Load single file (.ply/.splat/.spz/.ksplat)">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
-                    <span>Load</span>
+                    <span>Load File</span>
+                </button>
+                <button id="btn-load-folder" class="tool-btn" title="Load 3DGS scene folder (SIBR style)">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.097.903 2 2 2h16c1.097 0 2-.903 2-2V8c0-1.11-.9-2-2-2h-8l-2-2z"/></svg>
+                    <span>Load Folder</span>
                 </button>
                 <input type="file" id="file-input" accept=".ply,.splat,.spz,.ksplat" hidden>
+                <input type="file" id="folder-input" webkitdirectory directory multiple hidden>
             </div>
             <div class="toolbar-group mode-tabs">
                 <button class="mode-btn active" data-mode="view">View</button>
@@ -212,6 +217,10 @@
         document.getElementById('file-input').value = '';
         document.getElementById('file-input').click();
     });
+    document.getElementById('btn-load-folder').addEventListener('click', function() {
+        document.getElementById('folder-input').value = '';
+        document.getElementById('folder-input').click();
+    });
     </script>
     <!-- 主引擎用 module 方式加载，依赖 importmap -->
     <script type="module">
@@ -249,13 +258,23 @@
 
         // ========== 文件加载按钮（立即绑定）==========
         var fileInput = document.getElementById('file-input');
+        var folderInput = document.getElementById('folder-input');
         var btnLoad = document.getElementById('btn-load');
+        var btnLoadFolder = document.getElementById('btn-load-folder');
+        var sceneCameras = null; // SIBR cameras.json 解析结果
 
         btnLoad.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
             fileInput.value = '';
             fileInput.click();
+        });
+
+        btnLoadFolder.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            folderInput.value = '';
+            folderInput.click();
         });
 
         fileInput.addEventListener('change', function(e) {
@@ -279,6 +298,89 @@
             }
         });
 
+        // SIBR-style 文件夹加载 - 自动找 .ply 模型和 cameras.json
+        folderInput.addEventListener('change', async function(e) {
+            var files = Array.from(e.target.files || []);
+            if (files.length === 0) return;
+
+            setStatus('Scanning folder: ' + files.length + ' files...');
+            console.log('[3DGS] Folder selected with', files.length, 'files');
+
+            // 1. 找 splat 模型文件 (.ply / .splat / .spz / .ksplat)
+            var modelFile = null;
+            var modelCandidates = files.filter(function(f) {
+                var ext = f.name.split('.').pop().toLowerCase();
+                return ['ply', 'splat', 'spz', 'ksplat'].indexOf(ext) !== -1;
+            });
+
+            if (modelCandidates.length === 0) {
+                setStatus('No splat file (.ply/.splat/.spz/.ksplat) found in folder');
+                return;
+            }
+
+            // 优先级: point_cloud/iteration_*/*.ply > scene.ply > point_cloud.ply > 任意.ply
+            // SIBR 标准结构: scene/point_cloud/iteration_30000/point_cloud.ply
+            modelCandidates.sort(function(a, b) {
+                var pa = a.webkitRelativePath || a.name;
+                var pb = b.webkitRelativePath || b.name;
+                var sa = scoreModelPath(pa);
+                var sb = scoreModelPath(pb);
+                return sb - sa; // 高分在前
+            });
+            modelFile = modelCandidates[0];
+            console.log('[3DGS] Selected model:', modelFile.webkitRelativePath || modelFile.name);
+
+            // 2. 找 cameras.json (SIBR 训练相机轨迹)
+            var camerasJson = files.find(function(f) {
+                return f.name === 'cameras.json';
+            });
+
+            if (camerasJson) {
+                try {
+                    var text = await camerasJson.text();
+                    sceneCameras = JSON.parse(text);
+                    console.log('[3DGS] Loaded cameras.json with', sceneCameras.length, 'cameras');
+                    setStatus('Found ' + sceneCameras.length + ' training cameras');
+                } catch(err) {
+                    console.warn('[3DGS] Failed to parse cameras.json:', err);
+                    sceneCameras = null;
+                }
+            }
+
+            // 3. 找 cfg_args (可选 - 包含场景配置)
+            var cfgArgs = files.find(function(f) { return f.name === 'cfg_args'; });
+            if (cfgArgs) {
+                console.log('[3DGS] Found cfg_args');
+            }
+
+            setStatus('Loading model: ' + modelFile.name);
+
+            if (engineReady && engine) {
+                loadModelFile(modelFile);
+            } else {
+                pendingFile = modelFile;
+                setStatus('File queued: ' + modelFile.name + ' (waiting for engine...)');
+            }
+        });
+
+        // SIBR 路径优先级评分: 越高越优先
+        function scoreModelPath(path) {
+            var score = 0;
+            var lower = path.toLowerCase();
+            // 完美匹配标准 SIBR 路径
+            if (/point_cloud\/iteration_\d+\/point_cloud\.ply/i.test(path)) score += 1000;
+            if (lower.indexOf('point_cloud') !== -1) score += 100;
+            // 高迭代数优先 (iteration_30000 > iteration_7000)
+            var iter = path.match(/iteration_(\d+)/);
+            if (iter) score += parseInt(iter[1]) / 1000;
+            // 文件名匹配
+            if (/point_cloud\.(ply|splat|spz|ksplat)$/i.test(path)) score += 50;
+            if (/scene\.(ply|splat|spz|ksplat)$/i.test(path)) score += 40;
+            // 避免 input.ply (这是输入点云，不是训练结果)
+            if (/input\.ply$/i.test(path)) score -= 100;
+            return score;
+        }
+
         // ========== 拖拽 ==========
         var appEl = document.getElementById('app');
 
@@ -291,10 +393,25 @@
             e.preventDefault();
             appEl.classList.remove('drag-over');
         });
-        appEl.addEventListener('drop', function(e) {
+        appEl.addEventListener('drop', async function(e) {
             e.preventDefault();
             e.stopPropagation();
             appEl.classList.remove('drag-over');
+
+            // 检查是否是文件夹拖拽 (DataTransferItemList API)
+            var items = e.dataTransfer && e.dataTransfer.items;
+            if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+                var entry = items[0].webkitGetAsEntry();
+                if (entry && entry.isDirectory) {
+                    setStatus('Scanning dropped folder...');
+                    var allFiles = await readFolderEntries(entry);
+                    console.log('[3DGS] Folder dropped with', allFiles.length, 'files');
+                    handleFolderFiles(allFiles);
+                    return;
+                }
+            }
+
+            // 单文件拖拽
             var files = e.dataTransfer && e.dataTransfer.files;
             if (!files || files.length === 0) return;
             var file = files[0];
@@ -305,6 +422,62 @@
                 setStatus('File queued: ' + file.name + ' (waiting for engine...)');
             }
         });
+
+        // 递归读取文件夹内的所有文件 (用于拖拽文件夹场景)
+        async function readFolderEntries(entry, path) {
+            path = path || '';
+            var results = [];
+            if (entry.isFile) {
+                var file = await new Promise(function(r) { entry.file(r); });
+                // 添加 webkitRelativePath 兼容字段
+                Object.defineProperty(file, 'webkitRelativePath', {
+                    value: path + entry.name,
+                    writable: false
+                });
+                results.push(file);
+            } else if (entry.isDirectory) {
+                var reader = entry.createReader();
+                var entries = await new Promise(function(r) { reader.readEntries(r); });
+                for (var i = 0; i < entries.length; i++) {
+                    var sub = await readFolderEntries(entries[i], path + entry.name + '/');
+                    results = results.concat(sub);
+                }
+            }
+            return results;
+        }
+
+        // 处理一组文件夹文件 (与 folder-input change 相同逻辑)
+        async function handleFolderFiles(files) {
+            var modelCandidates = files.filter(function(f) {
+                var ext = f.name.split('.').pop().toLowerCase();
+                return ['ply', 'splat', 'spz', 'ksplat'].indexOf(ext) !== -1;
+            });
+
+            if (modelCandidates.length === 0) {
+                setStatus('No splat file found in folder');
+                return;
+            }
+
+            modelCandidates.sort(function(a, b) {
+                return scoreModelPath(b.webkitRelativePath || b.name) - scoreModelPath(a.webkitRelativePath || a.name);
+            });
+            var modelFile = modelCandidates[0];
+
+            var camerasJson = files.find(function(f) { return f.name === 'cameras.json'; });
+            if (camerasJson) {
+                try {
+                    var text = await camerasJson.text();
+                    sceneCameras = JSON.parse(text);
+                    setStatus('Found ' + sceneCameras.length + ' training cameras');
+                } catch(err) { sceneCameras = null; }
+            }
+
+            if (engineReady && engine) {
+                loadModelFile(modelFile);
+            } else {
+                pendingFile = modelFile;
+            }
+        }
 
         // ========== Mode 切换 ==========
         document.querySelectorAll('.mode-btn').forEach(function(btn) {
@@ -572,7 +745,40 @@
                     var frameAttempts = 0;
                     function autoFrame() {
                         try {
-                            // Spark.js 自带的 packedSplats.bounds 更准确
+                            // 优先使用 SIBR cameras.json 的第一个相机姿态
+                            if (sceneCameras && sceneCameras.length > 0) {
+                                var cam = sceneCameras[0];
+                                if (cam.position && cam.rotation) {
+                                    var pos = cam.position;
+                                    camera.position.set(pos[0], pos[1], pos[2]);
+                                    // SIBR 的 rotation 是 3x3 矩阵 (row-major)
+                                    var rot = cam.rotation;
+                                    if (Array.isArray(rot[0])) {
+                                        var m = new THREE.Matrix4();
+                                        m.set(
+                                            rot[0][0], rot[0][1], rot[0][2], 0,
+                                            rot[1][0], rot[1][1], rot[1][2], 0,
+                                            rot[2][0], rot[2][1], rot[2][2], 0,
+                                            0, 0, 0, 1
+                                        );
+                                        camera.quaternion.setFromRotationMatrix(m);
+                                    }
+                                    // 用相机正前方做轨道目标
+                                    var fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                                    target.copy(camera.position).add(fwd.multiplyScalar(3));
+                                    var d = camera.position.distanceTo(target);
+                                    spherical.setFromVector3(camera.position.clone().sub(target));
+                                    spherical.radius = d;
+                                    if (cam.fy && cam.height) {
+                                        camera.fov = 2 * Math.atan(cam.height / (2 * cam.fy)) * 180 / Math.PI;
+                                        camera.updateProjectionMatrix();
+                                    }
+                                    console.log('[3DGS] Camera set from cameras.json[0]');
+                                    return;
+                                }
+                            }
+
+                            // 回退：用 bounding box 居中
                             var center = new THREE.Vector3(0, 0, 0);
                             var radius = 3;
 
@@ -592,14 +798,12 @@
                                 }
                             }
 
-                            // 安全的相机距离
                             radius = Math.max(radius, 0.5);
                             target.copy(center);
                             spherical.radius = radius * 2.5;
                             console.log('[3DGS] Camera framed - center:', center, 'radius:', spherical.radius);
                         } catch(frameErr) {
                             console.warn('Auto frame failed:', frameErr);
-                            // 失败也设置一个合理的默认相机
                             target.set(0, 0, 0);
                             spherical.radius = 5;
                         }
