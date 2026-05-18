@@ -607,6 +607,12 @@
             camera.far = 10000;
             camera.updateProjectionMatrix();
 
+            // State (scoped to engine instance)
+            var splatMesh = null;
+            var frameCount = 0;
+            var lastFpsTime = performance.now();
+            var fps = 0;
+
             // Orbit controls (inline simple version)
             var target = new THREE.Vector3(0, 0, 0);
             var spherical = { radius: 5, phi: Math.PI / 3, theta: Math.PI / 4 };
