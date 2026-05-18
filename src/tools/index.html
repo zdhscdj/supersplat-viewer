@@ -500,42 +500,75 @@
                         splatMesh = null;
                     }
 
-                    var newMesh = new sparkModule.SplatMesh();
                     var url = URL.createObjectURL(file);
                     var ext = file.name.split('.').pop().toLowerCase();
 
+                    // Spark.js 正确用法: 通过构造函数 { url, fileType } 加载
+                    var opts = { url: url };
+                    // .ply 和 .spz 可以自动检测格式，.splat 和 .ksplat 需要指定 fileType
+                    if (ext === 'splat' || ext === 'ksplat') {
+                        opts.fileType = ext;
+                    }
+
+                    var newMesh;
                     try {
-                        await newMesh.loadAsync(url, { fileType: ext });
-                    } catch(e1) {
+                        newMesh = new sparkModule.SplatMesh(opts);
+                    } catch(constructErr) {
+                        console.error('SplatMesh constructor error:', constructErr);
+                        // 回退：尝试无参构造 + loadAsync
                         try {
-                            await newMesh.loadAsync(url);
+                            newMesh = new sparkModule.SplatMesh();
+                            if (newMesh.loadAsync) {
+                                await newMesh.loadAsync(url, { fileType: ext });
+                            } else if (newMesh.load) {
+                                await newMesh.load(url, { fileType: ext });
+                            }
                         } catch(e2) {
                             URL.revokeObjectURL(url);
                             throw e2;
                         }
                     }
-                    URL.revokeObjectURL(url);
 
                     splatMesh = newMesh;
                     scene.add(splatMesh);
 
                     if (onProgress) onProgress(1);
 
+                    // 等待模型实际加载完成（SplatMesh 的 url 加载是异步的）
+                    // 轮询等待 packedSplats 就绪
                     var count = 0;
-                    if (splatMesh.packedSplats && splatMesh.packedSplats.splatCount) {
-                        count = splatMesh.packedSplats.splatCount;
+                    var waited = 0;
+                    while (waited < 30000) { // 最多等30秒
+                        if (splatMesh.packedSplats && splatMesh.packedSplats.splatCount > 0) {
+                            count = splatMesh.packedSplats.splatCount;
+                            break;
+                        }
+                        // 检查是否有 loaded/ready 事件
+                        if (splatMesh.loaded || splatMesh.ready) {
+                            count = splatMesh.packedSplats?.splatCount || splatMesh.count || 0;
+                            break;
+                        }
+                        await new Promise(function(r) { setTimeout(r, 200); });
+                        waited += 200;
+                        if (onProgress) onProgress(Math.min(0.9, waited / 10000));
                     }
+
+                    if (onProgress) onProgress(1);
 
                     // Auto frame
                     setTimeout(function() {
-                        var box = new THREE.Box3().setFromObject(splatMesh);
-                        if (!box.isEmpty()) {
-                            var center = new THREE.Vector3();
-                            box.getCenter(center);
-                            var size = new THREE.Vector3();
-                            box.getSize(size);
-                            target.copy(center);
-                            spherical.radius = size.length() * 0.7;
+                        try {
+                            var box = new THREE.Box3().setFromObject(splatMesh);
+                            if (!box.isEmpty()) {
+                                var center = new THREE.Vector3();
+                                box.getCenter(center);
+                                var size = new THREE.Vector3();
+                                box.getSize(size);
+                                target.copy(center);
+                                spherical.radius = Math.max(size.length() * 0.7, 1);
+                            }
+                        } catch(frameErr) {
+                            console.warn('Auto frame failed:', frameErr);
                         }
                     }, 300);
 
