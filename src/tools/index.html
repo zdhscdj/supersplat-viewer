@@ -341,34 +341,69 @@
         // ========== 3D 引擎异步加载 ==========
         setStatus('Loading 3D engine...');
 
-        // 动态插入 importmap
-        var importMapScript = document.createElement('script');
-        importMapScript.type = 'importmap';
-        importMapScript.textContent = JSON.stringify({
-            imports: {
-                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js",
-                "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/2.0.0/spark.module.js"
+        // 多源回退加载函数
+        async function tryImport(urls) {
+            for (var i = 0; i < urls.length; i++) {
+                try {
+                    setStatus('Trying CDN source ' + (i+1) + '/' + urls.length + '...');
+                    console.log('[3DGS] Trying:', urls[i]);
+                    var m = await import(urls[i]);
+                    console.log('[3DGS] Loaded from:', urls[i]);
+                    return m;
+                } catch(e) {
+                    console.warn('[3DGS] Failed:', urls[i], e.message);
+                }
             }
-        });
-        // importmap 必须在任何 module script 之前插入，但页面已加载
-        // 所以我们用 blob URL 方式加载模块引擎
+            return null;
+        }
 
-        // 使用 blob import 绕过 importmap 限制
+        // CDN 源列表 (按优先级排列)
+        var THREE_URLS = [
+            'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js',
+            'https://unpkg.com/three@0.180.0/build/three.module.js',
+            'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js',
+            'https://esm.sh/three@0.180.0'
+        ];
+
+        var SPARK_URLS = [
+            'https://sparkjs.dev/releases/spark/2.0.0/spark.module.js',
+            'https://cdn.jsdelivr.net/gh/sparkjsdev/spark@main/dist/spark.module.js'
+        ];
+
         async function initEngine() {
             try {
-                // 直接用绝对 URL 导入
-                var THREE = await import('https://cdnjs.cloudflare.com/ajax/libs/three.js/0.180.0/three.module.js');
+                // 加载 THREE.js
+                setStatus('Loading THREE.js...');
+                var THREE = await tryImport(THREE_URLS);
+                if (!THREE) {
+                    setStatus('ERROR: Cannot load THREE.js from any CDN. Check internet.');
+                    return;
+                }
 
-                var sparkModule = null;
-                try {
-                    sparkModule = await import('https://sparkjs.dev/releases/spark/2.0.0/spark.module.js');
-                } catch(sparkErr) {
-                    console.warn('Spark.js load failed, will try without:', sparkErr);
+                // 加载 Spark.js
+                setStatus('Loading Spark.js...');
+                var sparkModule = await tryImport(SPARK_URLS);
+                if (!sparkModule) {
+                    console.warn('[3DGS] Spark.js unavailable from all sources');
+                    setStatus('WARNING: Spark.js failed. Try manual download (see console).');
+                    console.log(
+                        '%c[3DGS] 解决办法:\n' +
+                        '1. 在浏览器打开: https://sparkjs.dev/releases/spark/2.0.0/spark.module.js\n' +
+                        '2. 如果能访问，保存为 src/tools/spark.module.js\n' +
+                        '3. 修改代码中的 SPARK_URLS 添加 "./spark.module.js"\n' +
+                        '或者使用VPN/代理',
+                        'color: orange; font-size: 14px'
+                    );
                 }
 
                 engine = createEngine(THREE, sparkModule);
                 engineReady = true;
-                setStatus('Ready - Drop a .ply/.splat/.spz/.ksplat file or click Load');
+
+                if (sparkModule) {
+                    setStatus('Ready - Drop a .ply/.splat/.spz/.ksplat file or click Load');
+                } else {
+                    setStatus('Ready (Spark.js unavailable - see F12 console for fix)');
+                }
 
                 // 处理等待中的文件
                 if (pendingFile) {
@@ -378,7 +413,7 @@
                 }
             } catch(err) {
                 console.error('Engine load failed:', err);
-                setStatus('Engine load failed: ' + err.message + ' — Check internet/CDN access');
+                setStatus('Engine load failed: ' + err.message);
             }
         }
 
