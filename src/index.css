@@ -312,6 +312,67 @@ button {
 button:active {
     outline: none;
 }
+/* Speed Slider */
+#speedSliderWrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    margin-bottom: 8px;
+    background-color: rgba(0, 0, 0, 0.4);
+    border-radius: 8px;
+    width: fit-content;
+}
+#speedLabel {
+    font-size: 12px;
+    color: #eee;
+    white-space: nowrap;
+}
+#speedSlider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 120px;
+    height: 6px;
+    background: #888;
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+}
+#speedSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border: 2px solid #F60;
+    border-radius: 50%;
+    cursor: grab;
+}
+#speedSlider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border: 2px solid #F60;
+    border-radius: 50%;
+    cursor: grab;
+}
+#speedValue {
+    font-size: 12px;
+    color: #F60;
+    min-width: 36px;
+    text-align: right;
+    font-weight: bold;
+}
+
+/* Grid Toggle Active State */
+#toggleGrid.active {
+    background-color: #F60;
+    color: #fff;
+}
+#toggleGrid.active:hover {
+    background-color: #ff8533;
+}
+
 #joystickBase {
     position: absolute;
     width: 96px;

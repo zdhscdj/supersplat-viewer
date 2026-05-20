@@ -1,5 +1,5 @@
 import '@playcanvas/web-components';
-import { Asset, Color, Entity, EventHandler, MiniStats, Quat, ShaderChunks, Vec3 } from 'playcanvas';
+import { Asset, Color, Entity, EventHandler, Mesh, MeshInstance, MiniStats, PRIMITIVE_LINES, Quat, ShaderChunks, StandardMaterial, Vec3 } from 'playcanvas';
 import { XrControllers } from 'playcanvas/scripts/esm/xr-controllers.mjs';
 import { XrNavigation } from 'playcanvas/scripts/esm/xr-navigation.mjs';
 
@@ -269,6 +269,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         'timelineContainer', 'handle', 'time',
         'buttonContainer',
         'play', 'pause',
+        'toggleGrid',
+        'speedSliderWrap', 'speedSlider', 'speedValue',
         'settings', 'settingsPanel',
         'orbitSettings', 'flySettings',
         'fly', 'orbit', 'cameraToggleHighlight',
@@ -577,6 +579,89 @@ document.addEventListener('DOMContentLoaded', async () => {
             dom.joystickBase.style.top = `${base[1]}px`;
             dom.joystick.style.left = `${48 + v.x}px`;
             dom.joystick.style.top = `${48 + v.y}px`;
+        }
+    });
+
+    // =====================
+    // Grid Toggle
+    // =====================
+    let gridEntity = null;
+    let gridVisible = false;
+
+    const createGrid = () => {
+        const size = 20;
+        const divisions = 40;
+        const step = (size * 2) / divisions;
+        const halfSize = size;
+
+        const positions = [];
+        const indices = [];
+        let idx = 0;
+
+        for (let i = 0; i <= divisions; i++) {
+            const pos = -halfSize + i * step;
+
+            // Line along Z
+            positions.push(pos, 0, -halfSize);
+            positions.push(pos, 0, halfSize);
+            indices.push(idx, idx + 1);
+            idx += 2;
+
+            // Line along X
+            positions.push(-halfSize, 0, pos);
+            positions.push(halfSize, 0, pos);
+            indices.push(idx, idx + 1);
+            idx += 2;
+        }
+
+        const entity = new Entity('grid');
+        const mesh = new Mesh(app.graphicsDevice);
+        mesh.setPositions(positions);
+        mesh.setIndices(indices);
+        mesh.update(PRIMITIVE_LINES);
+
+        const material = new StandardMaterial();
+        material.diffuse = new Color(0, 0, 0);
+        material.emissive = new Color(0, 0, 0);
+        material.useLighting = false;
+        material.update();
+
+        const meshInstance = new MeshInstance(mesh, material);
+        entity.addComponent('render', {
+            meshInstances: [meshInstance]
+        });
+
+        app.root.addChild(entity);
+        return entity;
+    };
+
+    dom.toggleGrid.addEventListener('click', () => {
+        if (!gridEntity) {
+            gridEntity = createGrid();
+        }
+        gridVisible = !gridVisible;
+        gridEntity.enabled = gridVisible;
+        dom.toggleGrid.classList.toggle('active', gridVisible);
+        app.renderNextFrame = true;
+    });
+
+    // =====================
+    // Speed Slider
+    // =====================
+    let speedMultiplier = 1;
+
+    dom.speedSlider.addEventListener('input', () => {
+        speedMultiplier = parseFloat(dom.speedSlider.value);
+        dom.speedValue.textContent = `${speedMultiplier.toFixed(1)}x`;
+        events.fire('speedChanged', speedMultiplier);
+    });
+
+    // Show speed slider only in fly mode
+    events.on('cameraMode:changed', (value) => {
+        if (value === 'fly') {
+            dom.speedSliderWrap.classList.remove('hidden');
+        } else {
+            dom.speedSliderWrap.classList.add('hidden');
         }
     });
 
