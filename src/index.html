@@ -75,6 +75,13 @@
                     <div id="time" class="hidden">0:00</div>
                 </div>
 
+                <!-- Speed Slider (draggable, for fly mode) -->
+                <div id="speedSliderWrap" class="hidden">
+                    <label id="speedLabel">Speed</label>
+                    <input id="speedSlider" type="range" min="0.1" max="10" step="0.1" value="1">
+                    <span id="speedValue">1.0x</span>
+                </div>
+
                 <!-- Buttons Panel -->
                 <div id="buttonContainer">
                     <button id="play" class="button hidden">
@@ -82,6 +89,9 @@
                     </button>
                     <button id="pause" class="button hidden">
                         <svg xmlns="http://www.w3.org/2000/svg" width="24px" height="24px" viewBox="0 0 20 20" fill="currentColor"><path d="M5 16V4h3v12H5zm7-12h3v12h-3V4z"/></svg>
+                    </button>
+                    <button id="toggleGrid" class="button" title="Toggle Grid">
+                        <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960" width="24px" fill="currentColor"><path d="M120-120v-720h720v720H120Zm80-80h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Zm160 480h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Zm160 480h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Zm160 480h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Zm0-160h80v-80h-80v80Z"/></svg>
                     </button>
                     <div class="spacer"></div>
                     <button id="arMode" class="button hidden">

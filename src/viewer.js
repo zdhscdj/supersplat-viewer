@@ -242,6 +242,8 @@ class Viewer {
         // set move speed based on scene size, within reason
         const controller = new AppController(app.graphicsDevice.canvas, entity.camera);
         controller.moveSpeed = Math.max(0.05, Math.min(1, bbox.halfExtents.length() * 0.0001)) * 200;
+        this.controller = controller;
+        this.baseMoveSpeed = controller.moveSpeed;
 
         if (state.cameraMode === 'anim') {
             //  first frame of the animation
@@ -429,6 +431,20 @@ class Viewer {
                 });
             }
         });
+
+        // Listen for speed changes from UI
+        events.on('speedChanged', (multiplier) => {
+            controller.moveSpeed = this.baseMoveSpeed * multiplier;
+        });
+    }
+
+    /**
+     * Returns the input controller (available after initialize()).
+     *
+     * @returns {AppController|null}
+     */
+    getController() {
+        return this.controller ?? null;
     }
 }
 
